@@ -96,7 +96,8 @@ export default function MyOrdinals() {
     let psbtBase64 = await generatePSBTListingInscriptionForSale(utx0, 100, wallet.walletAddress);
     let signedPsbt = await signPSBTUsingWallet(psbtBase64);
     let item = {
-      owner, price, psbt: signedPsbt
+      owner, price, psbt: signedPsbt,
+      inscriptionNumber: number, utxo: utx0
     }
     const { result, error } = await saveOrdinalToFirebase(item);
     if (!error) {
