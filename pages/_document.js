@@ -9,6 +9,11 @@ export default function Document() {
       <body>
         <Main />
         <NextScript />
+        <script src="/js/secp256k1.js"></script>
+        <script type="module" src="/js/bitcoinjs-lib.js"></script>
+        <script type="module" src="/js/connectjs-lib.js"></script>
+        <script src="/js/nostr.js"></script>
+        <script src="/js/qrcode.js"></script>
       </body>
     </Html >
   )

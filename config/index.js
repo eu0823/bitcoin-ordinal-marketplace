@@ -28,6 +28,6 @@ const walletList = [
     keyword: 'unisat',
     icon: '/unisat.png',
   },
-]
+];
 
 export { receiveAddress, explorer, covalenthq_key, minAmount, walletList, claimAmount }

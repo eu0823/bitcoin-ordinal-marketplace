@@ -7,6 +7,7 @@ import ConnectWallet from "./ConnectWallet";
 
 export default function ListInscriptions() {
   const [tabs, setTabs] = useState(1);
+
   return (
     <div className="container mt-3">
       <ConnectWallet />
