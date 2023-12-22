@@ -1,38 +1,34 @@
 import React, { useEffect, useState } from 'react';
-import { addDocument } from '@/utils/addData';
 import { useSelector } from 'react-redux';
 import { getAllDoument } from '@/utils/getAllData';
 import toastr from 'toastr';
-import { tryEach } from '@/public/js/connectjs-lib';
 
+let dummyUtxoValue = 1_000;
+let numberOfDummyUtxosToCreate = 1;
+
+let isProduction = false;
+let network;
+let txHexByIdCache = {};
+// const baseMempoolUrl = isProduction ? "https://mempool.space" : "https://mempool.space/signet"
+const ordinalsExplorerUrl = isProduction ? "https://ordinals.com" : "https://explorer-signet.openordex.org"
+const baseMempoolUrl = isProduction ? "https://mempool.space" : "https://mempool.space/testnet"
+const networkName = isProduction ? "mainnet" : "signet"
+const baseMempoolApiUrl = `${baseMempoolUrl}/api`
+
+const bitcoinPriceApiUrl = "https://blockchain.info/ticker?cors=true";
+let bitcoinPrice = fetch(bitcoinPriceApiUrl)
+  .then(response => response.json())
+  .then(data => data.USD.last)
+
+let recommendedFeeRate;
+let paymentUtxos = [];
+let inscription;
+let sellerSignedPsbt;
+const feeLevel = "hourFee" // "fastestFee" || "halfHourFee" || "hourFee" || "economyFee" || "minimumFee"
 
 export default function Ordinals() {
 
-  let dummyUtxoValue = 1_000;
-  let numberOfDummyUtxosToCreate = 1;
-
-  let isProduction = false;
-  let network;
-  let txHexByIdCache = {};
-  // const baseMempoolUrl = isProduction ? "https://mempool.space" : "https://mempool.space/signet"
-  const ordinalsExplorerUrl = isProduction ? "https://ordinals.com" : "https://explorer-signet.openordex.org"
-  const baseMempoolUrl = isProduction ? "https://mempool.space" : "https://mempool.space/testnet"
-  const networkName = isProduction ? "mainnet" : "signet"
-  const baseMempoolApiUrl = `${baseMempoolUrl}/api`
-
-  const bitcoinPriceApiUrl = "https://blockchain.info/ticker?cors=true";
-  let bitcoinPrice = fetch(bitcoinPriceApiUrl)
-    .then(response => response.json())
-    .then(data => data.USD.last)
-
-  let recommendedFeeRate;
-  let paymentUtxos = [];
-  let inscription;
-  let sellerSignedPsbt;
-
-
   const wallet = useSelector(state => state.wallet);
-
 
   const [ordinals, setOrdinals] = useState([]);
 
@@ -44,7 +40,8 @@ export default function Ordinals() {
   const [price, setPrice] = useState(0);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-
+  const [buyBtnText, setBuyBtnText] = useState("Buy");
+  const [buying, setBuying] = useState(false);
   // Init bitcoin library
   //--------------------------------------------------
   useEffect(() => {
@@ -76,7 +73,9 @@ export default function Ordinals() {
     setOwner(item.owner);
     setPsbt(item.psbt);
     setUtxo(item.utxo);
-    setPrice(item.price);
+    setPrice(item.price / Math.pow(10, 8));
+
+    document.getElementById('buyPsbtQrCode').innerHTML = "";
     // try {
     //   inscription = await getInscriptionDataById(id);
     // } catch (error) {
@@ -84,7 +83,7 @@ export default function Ordinals() {
     // }
 
 
-    // sellerSignedPsbt = await getLowestPriceSellPSBGForUtxo(item.utxo)
+    sellerSignedPsbt = await getLowestPriceSellPSBGForUtxo(item.utxo);
 
     setVisible(true);
     // setUtx0Value(item.outputValue / Math.pow(10, 8) + "BTC" + `($${(utx0Value * await bitcoinPrice).toFixed(2)})`);
@@ -99,7 +98,7 @@ export default function Ordinals() {
 
   const handleBuy = async () => {
     if (wallet.walletAddress === "") return toastr.warning("Connect your wallet.");
-
+    setBuyBtnText("Buying..."); setBuying(true);
     recommendedFeeRate = fetch(`${baseMempoolApiUrl}/v1/fees/recommended`)
       .then(response => response.json())
       .then(data => data[feeLevel]);
@@ -111,13 +110,14 @@ export default function Ordinals() {
     let dummyUtxo = undefined
     try {
       for (const potentialDummyUtxo of potentialDummyUtxos) {
-        // if (!(await doesUtxoContainInscription(potentialDummyUtxo))) {
-        dummyUtxo = potentialDummyUtxo;
-        // break;
-        // }
+        if (!(await doesUtxoContainInscription(potentialDummyUtxo))) {
+          dummyUtxo = potentialDummyUtxo;
+          break;
+        }
       }
     } catch (error) {
       console.log(error);
+      setBuyBtnText("Buy"); setBuying(false);
     }
 
     let minimumValueRequired;
@@ -135,12 +135,13 @@ export default function Ordinals() {
     }
 
     try {
-      // paymentUtxos = await selectUtxos(payerUtxos, minimumValueRequired, vins, vouts, await recommendedFeeRate)
+      paymentUtxos = await selectUtxos(payerUtxos, minimumValueRequired, vins, vouts, await recommendedFeeRate)
     } catch (e) {
       // paymentUtxos = undefined
       paymentUtxos = []
       console.error(e)
 
+      setBuyBtnText("Buy"); setBuying(false);
       return alert(e)
     }
     let psbtDummyUtxos;
@@ -148,17 +149,23 @@ export default function Ordinals() {
       psbtDummyUtxos = await generatePSBTGeneratingDummyUtxos(wallet.walletAddress, numberOfDummyUtxosToCreate, paymentUtxos);
     } catch (error) {
       console.log(error);
+      setBuyBtnText("Buy"); setBuying(false);
     }
     let psbtByingInscription;
     try {
       psbtByingInscription = await generatePSBTBuyingInscription(wallet.walletAddress, wallet.walletAddress, price, payerUtxos, dummyUtxo);
     } catch (error) {
       console.log(error);
+      setBuyBtnText("Buy"); setBuying(false);
     }
-    console.log(psbtDummyUtxos, psbtByingInscription);
+    console.log("psbtDummyUtxos", psbtDummyUtxos);
+    console.log("psbtByingInscription", psbtByingInscription);
 
+    document.getElementById('buyPsbtQrCode').innerHTML = "";
+    (new QRCode('buyPsbtQrCode', { width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L })).makeCode(psbt)
     displayBuyPsbt(wallet.walletAddress, "Successfully bought.");
     // console.log(psbt);
+      setBuyBtnText("Buy"); setBuying(false);
   }
 
   const generatePSBTBuyingInscription = async (payerAddress, receiverAddress, price, paymentUtxos, dummyUtxo) => {
@@ -183,21 +190,29 @@ export default function Ordinals() {
     // Add inscription output
     psbt.addOutput({
       address: receiverAddress,
-      value: dummyUtxo.value + 0,
+      value: dummyUtxo.value + 546,
       // value: dummyUtxo.value + Number(inscription['output value']),
     });
 
-    // Add payer signed input
-    // psbt.addInput({
-    //   ...sellerSignedPsbt.data.globalMap.unsignedTx.tx.ins[0],
-    //   ...sellerSignedPsbt.data.inputs[0]
-    // })
-    // Add payer output
-    // psbt.addOutput({
-      // ...sellerSignedPsbt.data.globalMap.unsignedTx.tx.outs[0],
-    // })
+    console.log("sellerSignedPsbt:", sellerSignedPsbt);
 
-    console.log(paymentUtxos);
+    // this is one from blog, it works very well
+    // sellerSignedPsbt = 'cHNidP8BAHECAAAAARAHX5tvb9QfrWCvPD7ppuIeqZKtQSKMTsqZAZe/lrBwAQAAAAD/////AkBCDwAAAAAAFgAULva5vlFNJx1xXPPwYzu91XS92nVAQg8AAAAAABYAFMEX2P38j87ciG0/bQ2Tgt/ck8zMAAAAAAABAHECAAAAAQfvlhW7FRlAzH38PCQZnrcXKeoYf2+3XEGIgBLX2hgkAAAAAAD+////AgB/fzECAAAAFgAU3SW8c7oIOWOIDEVynJNmdJwPngRCFxcAAAAAABYAFMxLiDsrXulU+Kt/1gI73IFBNep3Jx8lAAEBH0IXFwAAAAAAFgAUzEuIOyte6VT4q3/WAjvcgUE16ncBCGsCRzBEAiBIPPbCJ8zdZ+xZehFor7l3xkpOvD0iXPzYfeKavVH2xAIgXJOHslgkjaBl2ptLVCyfcgiJbwR/kef3IDq5eboJ9hiBIQNrowhkw/mZKyWJI0Z23pV0MMzIDx1/6JKK+MxLkL3AcgAiAgIllaIZqBzbvbNmxCpaWCXr/39tBQMVIHSEMjthi8aJqBjgrRQXVAAAgAEAAIAAAACAAAAAAAQAAAAAAA==';
+
+    // this is psbt made by me, it doesn't works
+    // sellerSignedPsbt = '70736274ff01005e020000000148ded8b624d6c6f49408c4df60562cdf2b8af736c0f0c0b2c894b6a34d93b6530000000000ffffffff0164000000000000002251202e44139589786217999868b4f99771f93e9abb3773dcc5a5096aca37ae51a948000000000001005e02000000017f1a1ed2dddd3a53861022b98598f928d772c6b4484fd5a33a763641d5efa5f40000000000fffffffd0122020000000000002251202e44139589786217999868b4f99771f93e9abb3773dcc5a5096aca37ae51a9480000000001012b22020000000000002251202e44139589786217999868b4f99771f93e9abb3773dcc5a5096aca37ae51a9480108430141f9d7bcff75cb091248b75f9676a0c96d7a75cb9ca93b4318660fee28738996dc0f85973ab59f2b9289b5cb206004b2f159dfb5299b18c308bab6ee191d1783fe830000';
+    const psbtData = await bitcoin.Psbt.fromBase64(sellerSignedPsbt, { network });
+    console.log("psbtData", psbtData);
+
+    // Add payer signed input
+    psbt.addInput({
+      ...psbtData.data.globalMap.unsignedTx.tx.ins[0],
+      ...psbtData.data.inputs[0]
+    })
+    // Add payer output
+    psbt.addOutput({
+      ...psbtData.data.globalMap.unsignedTx.tx.outs[0],
+    })
 
     // Add payment utxo inputs
     for (const utxo of paymentUtxos) {
@@ -213,7 +228,6 @@ export default function Ordinals() {
       //   // witnessUtxo: tx.outs[utxo.vout],
       // });
 
-
       totalValue += utxo.value
       totalPaymentValue += utxo.value
     }
@@ -225,9 +239,11 @@ export default function Ordinals() {
       value: dummyUtxoValue,
     })
 
-    const fee = calculateFee(psbt.txInputs.length, psbt.txOutputs.length, await recommendedFeeRate)
+    const fee = calculateFee(psbt.txInputs.length, psbt.txOutputs.length, await recommendedFeeRate);
 
-    const changeValue = totalValue - dummyUtxo.value - price - fee
+    console.log(fee);
+
+    const changeValue = totalValue - dummyUtxo.value - price - fee;
 
     console.log("change", changeValue);
 
@@ -277,13 +293,11 @@ Missing:     ${satToBtc(-changeValue)} BTC`
     }
 
     const fee = calculateFee(psbt.txInputs.length, psbt.txOutputs.length, await recommendedFeeRate);
-    console.log(totalValue, totalValue - (numberOfDummyUtxosToCreate * dummyUtxoValue) - fee);
-    
+
     // Change utxo
     psbt.addOutput({
       address: payerAddress,
-      value: 50,
-      // value: totalValue - (numberOfDummyUtxosToCreate * dummyUtxoValue) - fee,
+      value: totalValue - (numberOfDummyUtxosToCreate * dummyUtxoValue) - fee,
     });
 
     return psbt.toBase64();
@@ -304,9 +318,9 @@ Missing:     ${satToBtc(-changeValue)} BTC`
 
     for (const utxo of utxos) {
       // Never spend a utxo that contains an inscription for cardinal purposes
-      if (await doesUtxoContainInscription(utxo)) {
-        continue
-      }
+      // if (await doesUtxoContainInscription(utxo)) {
+      //   continue
+      // }
       selectedUtxos.push(utxo)
       selectedAmount += utxo.value
 
@@ -324,47 +338,16 @@ Missing:     ${satToBtc(-changeValue)} BTC`
           ${utxos.map(x => `${x.txid}:${x.vout}`).join("\n")}`)
     }
 
-    return selectedUtxos
-  }
-
-  function validateSellerPSBTAndExtractPrice(sellerSignedPsbtBase64, utxo) {
-    try {
-      sellerSignedPsbt = bitcoin.Psbt.fromBase64(sellerSignedPsbtBase64, { network })
-      const sellerInput = sellerSignedPsbt.txInputs[0]
-      const sellerSignedPsbtInput = `${sellerInput.hash.reverse().toString('hex')}:${sellerInput.index}`
-
-      if (sellerSignedPsbtInput != utxo) {
-        throw `Seller signed PSBT does not match this inscription\n\n${sellerSignedPsbtInput}\n!=\n${utxo}`
-      }
-
-      if (sellerSignedPsbt.txInputs.length != 1 || sellerSignedPsbt.txInputs.length != 1) {
-        throw `Invalid seller signed PSBT`
-      }
-
-      try {
-        sellerSignedPsbt.extractTransaction(true)
-      } catch (e) {
-        if (e.message == 'Not finalized') {
-          throw 'PSBT not signed'
-        } else if (e.message != 'Outputs are spending more than Inputs') {
-          throw 'Invalid PSBT ' + e.message || e
-        }
-      }
-
-      const sellerOutput = sellerSignedPsbt.txOutputs[0]
-      let price = sellerOutput.value
-
-      return Number(price)
-    } catch (e) {
-      console.error(e)
-    }
+    return selectedUtxos;
   }
 
   async function doesUtxoContainInscription(utxo) {
-    const html = await fetch(`${ordinalsExplorerUrl}/output/${utxo.txid}:${utxo.vout}`)
-      .then(response => response.text())
+    // const html = await fetch(`${ordinalsExplorerUrl}/output/${utxo.txid}:${utxo.vout}`)
+    //   .then(response => response.text())
 
-    return html.match(/class=thumbnails/) !== null
+    // return html.match(/class=thumbnails/) !== null
+    // return true;
+    return false;
   }
 
   function calculateFee(vins, vouts, recommendedFeeRate, includeChangeOutput = true) {
@@ -387,39 +370,33 @@ Missing:     ${satToBtc(-changeValue)} BTC`
     return txHexByIdCache[txId]
   }
 
-  async function getInscriptionDataById(inscriptionId, verifyIsInscriptionNumber) {
-    const html = await fetch(ordinalsExplorerUrl + "/inscription/" + inscriptionId)
-      .then(response => response.text())
-
-    const data = [...html.matchAll(/<dt>(.*?)<\/dt>\s*<dd.*?>(.*?)<\/dd>/gm)]
-      .map(x => { x[2] = x[2].replace(/<.*?>/gm, ''); return x })
-      .reduce((a, b) => { return { ...a, [b[1]]: b[2] } }, {});
-
-    const error = `Inscription ${verifyIsInscriptionNumber || inscriptionId} not found (maybe you're on signet and looking for a mainnet inscription or vice versa)`
-    try {
-      data.number = html.match(/<h1>Inscription (\d*)<\/h1>/)[1]
-    } catch { throw new Error(error) }
-    if (verifyIsInscriptionNumber && String(data.number) != String(verifyIsInscriptionNumber)) {
-      throw new Error(error)
-    }
-
-    return data
-  }
-
   async function getLowestPriceSellPSBGForUtxo(utxo) {
-    await nostrRelay.connect()
-    const orders = (await nostrRelay.list([{
-      kinds: [nostrOrderEventKind],
-      "#u": [utxo]
-    }])).filter(a => a.tags.find(x => x?.[0] == 's')?.[1])
-      .sort((a, b) => Number(a.tags.find(x => x?.[0] == 's')[1]) - Number(b.tags.find(x => x?.[0] == 's')[1]))
+    // if (isProduction) {
+    //   await nostrRelay.connect()
+    //   const orders = (await nostrRelay.list([{
+    //     kinds: [nostrOrderEventKind],
+    //     "#u": [utxo]
+    //   }])).filter(a => a.tags.find(x => x?.[0] == 's')?.[1])
+    //     .sort((a, b) => Number(a.tags.find(x => x?.[0] == 's')[1]) - Number(b.tags.find(x => x?.[0] == 's')[1]))
 
-    for (const order of orders) {
-      const price = validateSellerPSBTAndExtractPrice(order.content, utxo)
-      if (price == Number(order.tags.find(x => x?.[0] == 's')[1])) {
-        return order.content
+    //   for (const order of orders) {
+    //     const price = validateSellerPSBTAndExtractPrice(order.content, utxo)
+    //     if (price == Number(order.tags.find(x => x?.[0] == 's')[1])) {
+    //       return order.content
+    //     }
+    //   }
+    // } else {
+    let minimum = Infinity;
+    let psbtOfMinimumUtxo = "";
+    ordinals.map(item => {
+      if (item.utxo === utxo && item.price < minimum) {
+        minimum = item.price;
+        psbtOfMinimumUtxo = item.psbt;
       }
-    }
+    });
+    return psbtOfMinimumUtxo;
+    // }
+
   }
 
   const displayBuyPsbt = async (payerAddress, successMessage) => {
@@ -468,6 +445,7 @@ Missing:     ${satToBtc(-changeValue)} BTC`
             </div>
             <div className="modal-body">
               <div className='text-center'>
+                <div id='buyPsbtQrCode' className='my-2' />
                 <iframe src={`https://static-testnet.unisat.io/preview/${id}`} width="80%" scrolling="no"></iframe>
               </div>
               <div className="mb-3">
@@ -487,7 +465,7 @@ Missing:     ${satToBtc(-changeValue)} BTC`
                 <input type="text" className="form-control" id="UTXO_Value" placeholder="Price" value={price} readOnly />
               </div>
               <div className='mb-3 d-flex gap-3 justify-content-center'>
-                <button type="button" className="btn btn-primary" onClick={() => handleBuy()}>Buy</button>
+                <button type="button" className="btn btn-primary" onClick={() => handleBuy()} disabled={buying !== false}>{buyBtnText}</button>
                 <button type="button" className="btn btn-secondary" onClick={() => setVisible(false)}>Close</button>
               </div>
             </div>

@@ -93,11 +93,13 @@ export default function MyOrdinals() {
     let price = 0;
     let inputText = prompt("Please enter price:", "0");
     price = parseFloat(inputText);
-    let psbtBase64 = await generatePSBTListingInscriptionForSale(utx0, 100, wallet.walletAddress);
+    price *= Math.pow(10, 8)
+    let psbtBase64 = await generatePSBTListingInscriptionForSale(utx0, price, wallet.walletAddress);
     let signedPsbt = await signPSBTUsingWallet(psbtBase64);
     let item = {
-      owner, price, psbt: signedPsbt,
-      inscriptionNumber: number, utxo: utx0
+      owner, price, psbt: psbtBase64,
+      inscriptionNumber: number, utxo: utx0,
+      utx0Value: utx0Value
     }
     const { result, error } = await saveOrdinalToFirebase(item);
     if (!error) {
